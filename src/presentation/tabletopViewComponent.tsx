@@ -72,6 +72,14 @@ interface TabletopViewComponentEditSelected {
     finish: (value: string) => void;
 }
 
+interface AttachCircle {
+    targetMiniId: string;
+    lastTime: number;
+    radius: number;
+    targetRadius: number;
+    position: THREE.Vector3;
+}
+
 interface TabletopViewComponentProps extends ReactSizeMeProps {
     fullDriveMetadata: {[key: string]: DriveMetadata};
     dispatch: Dispatch<ReduxStoreType>;
@@ -118,6 +126,7 @@ interface TabletopViewComponentState {
     };
     autoPanInterval?: Timer;
     noGridToastId?: number;
+    attachCircle?: AttachCircle;
 }
 
 type RayCastField = 'mapId' | 'miniId';
@@ -398,6 +407,8 @@ class TabletopViewComponent extends React.Component<TabletopViewComponentProps, 
         }
     ];
 
+    private animationTimeout: number | null = null;
+
     constructor(props: TabletopViewComponentProps) {
         super(props);
         this.setScene = this.setScene.bind(this);
@@ -427,6 +438,30 @@ class TabletopViewComponent extends React.Component<TabletopViewComponentProps, 
 
     componentWillReceiveProps(props: TabletopViewComponentProps) {
         this.actOnProps(props);
+    }
+
+    componentDidUpdate() {
+        if (!this.animationTimeout && this.state.attachCircle && Math.abs(this.state.attachCircle.radius - this.state.attachCircle.targetRadius) > 0.01) {
+            this.animationTimeout = window.setTimeout(() => {
+                this.animationTimeout = null;
+                const attachCircle = this.state.attachCircle;
+                if (attachCircle) {
+                    if (attachCircle.radius < 0) {
+                        this.setState({attachCircle: undefined});
+                    } else {
+                        const now = Date.now();
+                        const delta = now - attachCircle.lastTime;
+                        this.setState({
+                            attachCircle: {
+                                ...attachCircle,
+                                radius: attachCircle.radius + (attachCircle.targetRadius - attachCircle.radius) * delta / 100,
+                                lastTime: now
+                            }
+                        });
+                    }
+                }
+            }, 10);
+        }
     }
 
     selectionStillValid(data: {[key: string]: MapType | MiniType}, key?: string, props = this.props) {
@@ -462,7 +497,7 @@ class TabletopViewComponent extends React.Component<TabletopViewComponentProps, 
                                 this.props.dispatch(addFilesAction([fullMetadata]));
                             }
                         })
-                        .catch((err) => {
+                        .catch(() => {
                             this.props.dispatch(setFileErrorAction(metadata.id))
                         });
                 } else if (driveMetadata.appProperties) {
@@ -494,7 +529,7 @@ class TabletopViewComponent extends React.Component<TabletopViewComponentProps, 
         }
     }
 
-    rayCastFromScreen(position: THREE.Vector2): THREE.Intersection[] {
+    private rayCastFromScreen(position: THREE.Vector2): THREE.Intersection[] {
         if (this.state.scene && this.state.camera) {
             this.rayPoint.x = 2 * position.x / this.props.size.width - 1;
             this.rayPoint.y = 1 - 2 * position.y / this.props.size.height;
@@ -505,12 +540,13 @@ class TabletopViewComponent extends React.Component<TabletopViewComponentProps, 
         }
     }
 
-    findAncestorWithUserDataFields(object: any, fields: RayCastField[]): [any, RayCastField] | null {
+    private findAncestorWithUserDataFields(intersect: THREE.Intersection, fields: RayCastField[]): [any, RayCastField, THREE.Intersection] | null {
+        let object: any = intersect.object;
         while (object) {
             let matchingField = object.userDataA && fields.reduce((result, field) =>
                 (result || (object.userDataA[field] && field)), null);
             if (matchingField) {
-                return [object, matchingField];
+                return [object, matchingField, intersect];
             } else {
                 object = object.parent;
             }
@@ -518,26 +554,36 @@ class TabletopViewComponent extends React.Component<TabletopViewComponentProps, 
         return null;
     }
 
-    rayCastForFirstUserDataFields(position: THREE.Vector2, fields: RayCastField | RayCastField[], intersects = this.rayCastFromScreen(position)) {
-        const interestLevelY = this.getInterestLevelY();
+    private rayCastForFirstUserDataFields(position: THREE.Vector2, fields: RayCastField | RayCastField[], intersects: THREE.Intersection[] = this.rayCastFromScreen(position)) {
         const fieldsArray = Array.isArray(fields) ? fields : [fields];
-        const selected = intersects.reduce((selected, intersect) => {
-            const hit = (intersect.point.y > interestLevelY) ? 'secondary' : 'primary';
-            if (!selected[hit]) {
-                const ancestor = this.findAncestorWithUserDataFields(intersect.object, fieldsArray);
+        return intersects.reduce((selected, intersect) => {
+            if (!selected) {
+                const ancestor = this.findAncestorWithUserDataFields(intersect, fieldsArray);
                 if (ancestor) {
                     const [object, field] = ancestor;
-                    return {...selected, [hit]: {
+                    return {
                         [field]: object.userDataA[field],
                         point: intersect.point,
                         position,
                         object: intersect.object
-                    }};
+                    };
                 }
             }
             return selected;
-        }, {});
-        return selected['primary'] || selected['secondary'];
+        }, null);
+    }
+
+    private rayCastForUserDataFields(position: THREE.Vector2, fields: RayCastField | RayCastField[], intersects = this.rayCastFromScreen(position)) {
+        const fieldsArray = Array.isArray(fields) ? fields : [fields];
+        return intersects
+            .map((intersect) => (this.findAncestorWithUserDataFields(intersect, fieldsArray)))
+            .filter((value): value is [any, RayCastField, THREE.Intersection] => (!!value))
+            .map(([object, field, intersect]) => ({
+                [field]: object.userDataA[field],
+                point: intersect.point,
+                position,
+                object: intersect.object
+            }));
     }
 
     duplicateMini(miniId: string) {
@@ -582,9 +628,41 @@ class TabletopViewComponent extends React.Component<TabletopViewComponentProps, 
     }
 
     panMini(position: THREE.Vector2, id: string) {
-        const selected = this.rayCastForFirstUserDataFields(position, 'mapId');
+        const allSelected = this.rayCastForUserDataFields(position, ['mapId', 'miniId']);
+        let firstOtherMini = null, firstMap = null;
+        for (let selected of allSelected) {
+            if (!firstMap && !firstOtherMini && selected.miniId && selected.miniId !== id) {
+                firstOtherMini = selected;
+            } else if (!firstMap && selected.mapId) {
+                firstMap = selected;
+            }
+        }
+        // If the ray intersects with a mini that isn't me before it intersects with a map, trigger the attach circle.
+        if (firstOtherMini && (!this.state.attachCircle || this.state.attachCircle.targetMiniId !== firstOtherMini.miniId)) {
+            const myRadius = this.props.scenario.minis[id].scale;
+            let targetMini = this.props.scenario.minis[firstOtherMini.miniId];
+            const offset = new THREE.Vector3((targetMini.scale + myRadius) / 2, 0.01, 0);
+            const position = offset.applyQuaternion(this.getInverseCameraQuaternion()).add(targetMini.position as THREE.Vector3);
+            this.setState({
+                attachCircle: {
+                    targetMiniId: firstOtherMini.miniId,
+                    radius: 0,
+                    targetRadius: myRadius / 2,
+                    lastTime: Date.now(),
+                    position
+                }
+            });
+        } else if (!firstOtherMini && this.state.attachCircle) {
+            this.setState({
+                attachCircle: {
+                    ...this.state.attachCircle,
+                    lastTime: Date.now(),
+                    targetRadius: -0.1
+                }
+            });
+        }
         // If the ray intersects with a map, drag over the map - otherwise drag over starting plane.
-        const dragY = (selected && selected.mapId) ? (this.props.scenario.maps[selected.mapId].position.y - this.state.dragOffset!.y) : this.state.defaultDragY!;
+        const dragY = (firstMap) ? (this.props.scenario.maps[firstMap.mapId].position.y - this.state.dragOffset!.y) : this.state.defaultDragY!;
         this.plane.setComponents(0, -1, 0, dragY);
         if (this.rayCaster.ray.intersectPlane(this.plane, this.offset)) {
             this.offset.add(this.state.dragOffset as THREE.Vector3);
@@ -936,14 +1014,7 @@ class TabletopViewComponent extends React.Component<TabletopViewComponentProps, 
         this.state.camera && this.state.camera.getWorldDirection(this.offset);
         const topDown = this.offset.dot(TabletopViewComponent.DIR_DOWN) > constants.TOPDOWN_DOT_PRODUCT;
         // In top-down mode, we want to counter-rotate labels.  Find camera inverse rotation around the Y axis.
-        let cameraInverseQuat: THREE.Quaternion | undefined;
-        if (this.state.camera) {
-            const cameraQuaternion = this.state.camera.quaternion;
-            this.offset.set(cameraQuaternion.x, cameraQuaternion.y, cameraQuaternion.z);
-            this.offset.projectOnVector(TabletopViewComponent.DIR_DOWN);
-            cameraInverseQuat = new THREE.Quaternion(this.offset.x, this.offset.y, this.offset.z, cameraQuaternion.w)
-                .normalize();
-        }
+        const cameraInverseQuat = this.getInverseCameraQuaternion();
         return Object.keys(this.props.scenario.minis)
             .filter((miniId) => (this.props.scenario.minis[miniId].position.y <= interestLevelY))
             .map((miniId) => {
@@ -990,6 +1061,18 @@ class TabletopViewComponent extends React.Component<TabletopViewComponentProps, 
                         />
                     ) : null
             });
+    }
+
+    private getInverseCameraQuaternion(): THREE.Quaternion {
+        if (this.state.camera) {
+            const cameraQuaternion = this.state.camera.quaternion;
+            this.offset.set(cameraQuaternion.x, cameraQuaternion.y, cameraQuaternion.z);
+            this.offset.projectOnVector(TabletopViewComponent.DIR_DOWN);
+            return new THREE.Quaternion(this.offset.x, this.offset.y, this.offset.z, cameraQuaternion.w)
+                .normalize();
+        } else {
+            return new THREE.Quaternion();
+        }
     }
 
     roundVectors(start: THREE.Vector3, end: THREE.Vector3) {
@@ -1082,6 +1165,20 @@ class TabletopViewComponent extends React.Component<TabletopViewComponentProps, 
             );
         } else {
             return null;
+        }
+    }
+
+    renderAttachCircle() {
+        if (!this.state.attachCircle) {
+            return null;
+        } else {
+            const geometry = new THREE.CylinderGeometry(this.state.attachCircle.radius, this.state.attachCircle.radius, 0.01, 32);
+            return (
+                <lineSegments position={this.state.attachCircle.position}>
+                    <edgesGeometry geometry={geometry}/>
+                    <lineBasicMaterial color={0xffff00}/>
+                </lineSegments>
+            );
         }
     }
 
@@ -1226,6 +1323,7 @@ class TabletopViewComponent extends React.Component<TabletopViewComponentProps, 
                             {this.renderMaps(interestLevelY)}
                             {this.renderMinis(interestLevelY)}
                             {this.renderFogOfWarRect()}
+                            {this.renderAttachCircle()}
                         </scene>
                     </React3>
                     {
