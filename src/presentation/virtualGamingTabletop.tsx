@@ -73,7 +73,6 @@ import BundleFileEditor from './bundleFileEditor';
 import {BundleType, isBundle} from '../util/bundleUtils';
 import {setBundleIdAction} from '../redux/bundleReducer';
 import TemplateEditor from './templateEditor';
-import ChatBox from './chatBox';
 
 import './virtualGamingTabletop.css';
 
@@ -849,8 +848,6 @@ class VirtualGamingTabletop extends React.Component<VirtualGamingTabletopProps, 
                 {this.renderAvatars()}
                 {this.renderFileErrorModal()}
                 <div className='mainArea'>
-                    <ChatBox />
-
                     <TabletopViewComponent
                         scenario={this.props.scenario}
                         tabletop={this.props.tabletop}

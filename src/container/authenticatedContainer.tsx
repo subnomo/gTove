@@ -7,11 +7,12 @@ import googleAPI from '../util/googleAPI';
 import {discardStoreAction, getLoggedInUserFromStore, ReduxStoreType} from '../redux/mainReducer';
 import VirtualGamingTabletop from '../presentation/virtualGamingTabletop';
 import {setLoggedInUserAction} from '../redux/loggedInUserReducer';
-import offlineAPI from '../util/offlineAPI';
+// import offlineAPI from '../util/offlineAPI';
 import OfflineFolderComponent from './offlineFolderComponent';
 import {DriveUser} from '../util/googleDriveUtils';
 import {PromiseComponentFunc} from './promiseHOC';
 import PromiseModalDialog, {PromiseModalDialogProps} from '../presentation/promiseModalDialog';
+import ChatBox from '../presentation/chatBox';
 
 interface AuthenticatedContainerProps {
     dispatch: Dispatch<ReduxStoreType>;
@@ -94,6 +95,8 @@ class AuthenticatedContainer extends React.Component<AuthenticatedContainerProps
                         )
                     ) : (
                         <div>
+                            <ChatBox />
+                            {/*
                             <h1>gTove - a virtual gaming tabletop</h1>
                             <p>This project is a lightweight web application to simulate a virtual tabletop.  Multiple
                                 maps and standee-style miniatures can be placed on the tabletop, and everyone connected
@@ -136,6 +139,7 @@ class AuthenticatedContainer extends React.Component<AuthenticatedContainerProps
                             }}>
                                 Work Offline
                             </button>
+                            */}
                         </div>
                     )
                 }

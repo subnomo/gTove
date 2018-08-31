@@ -17,7 +17,7 @@ function aparse(csv: string): any {
 
 interface Message {
     author: string;
-    content: string;
+    content: any;
 }
 
 interface ChatBoxState {
@@ -100,14 +100,13 @@ export default class ChatBox extends React.Component<any, ChatBoxState> {
         });
 
         const csv = await res.text();
-
         const macros: string[][] = await aparse(csv);
 
         const options = macros.slice(1).map((spell, i) => {
             if (spell[1] !== 'url') return;
 
             return {
-                value: <a href={spell[3]}>{spell[0]}</a>,
+                value: <a target='_blank' href={spell[3]}>{spell[0]}</a>,
                 label: spell[0],
             };
         });
@@ -118,7 +117,7 @@ export default class ChatBox extends React.Component<any, ChatBoxState> {
     }
 
     handleChange(value: any) {
-        if (!value.value) return;
+        if (!value) return;
 
         const author = 'sub'; // Test name
         const message: Message = {
@@ -131,8 +130,8 @@ export default class ChatBox extends React.Component<any, ChatBoxState> {
 
         this.setState({
             messages,
-            selectValue: null,
             inputValue: '',
+            selectValue: this.state.selectValue === '' ? null : '', // Hack
         });
     }
 
@@ -145,6 +144,8 @@ export default class ChatBox extends React.Component<any, ChatBoxState> {
     }
 
     handleInputKeyDown(e: React.KeyboardEvent<any>) {
+        const { inputValue, selectValue, messages } = this.state;
+
         // Send chat
         if (e.key === 'Enter') {
             e.preventDefault();
@@ -152,15 +153,13 @@ export default class ChatBox extends React.Component<any, ChatBoxState> {
             const author = 'sub'; // Test name
             const message: Message = {
                 author,
-                content: this.state.inputValue,
+                content: inputValue,
             };
 
             // Add to array and clear input
-            const messages = this.state.messages.concat(message);
-
             this.setState({
-                messages,
-                selectValue: null,
+                messages: messages.concat(message),
+                selectValue: selectValue === '' ? null : '', // Hack
                 inputValue: '',
             });
         }
